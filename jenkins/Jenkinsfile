@@ -1,0 +1,134 @@
+def slackResponse = slackSend(message: "Setting up Jenkins-Slave...")
+pipeline {
+  tools {
+        jdk 'Java17'
+    }
+  agent {
+    node {
+      label 'Jenkins-Slave'
+    }
+  }
+  stages {
+    stage('Prepare Environment') {
+      steps {
+        echo 'Getting secrets...'
+        script {
+          sh "curl -fsSL https://get.pulumi.com | sh"
+          sh "$HOME/.pulumi/bin/pulumi version"
+          PROJECT_NAME = env.JOB_NAME.tokenize("/").first()
+          def userIds = slackUserIdsFromCommitters()
+          def userIdsString = userIds.collect {
+            "<@$it>"
+          }.join(' ')
+          def blocks = [
+            ["type": "section", "text": ["type": "mrkdwn", "text": "*Project:* <$GIT_URL|$PROJECT_NAME>\n*Branch:* $GIT_BRANCH\n*Commit:* ${GIT_COMMIT.substring(0,7)}\n*Changes by* $userIdsString"]],
+            ["type": "divider"]
+          ]
+          slackSend(channel: slackResponse.channelId, blocks: blocks, timestamp: slackResponse.ts)
+          slackSend(channel: slackResponse.channelId, message: "Prepare Environment...", timestamp: slackResponse.ts)
+          switch (GIT_BRANCH) {
+          case 'integration/develop':
+            environment = 'dev'
+            break
+          case "integration/stage":
+            environment = 'stg'
+            break
+          case "master":
+            environment = 'prod'
+            break
+          default:
+            println("Branch value error: " + GIT_BRANCH)
+          }
+        }
+        sh "aws secretsmanager get-secret-value --region us-west-1 --secret-id 'Jenkins/$PROJECT_NAME/$environment' --query SecretString --output text > envs.json"
+      }
+    }
+    stage('Test') {
+      steps {
+        script {
+          def mvn = tool 'Default Maven';
+          configFileProvider(
+            [configFile(fileId: '996ba840-db18-492e-bb56-55119c2224f1', variable: 'MAVEN_SETTINGS')]) {
+            sh '''cat $MAVEN_SETTINGS > settings.xml
+                  ${mvn}/bin/mvn -s settings.xml test'''
+          }
+        }
+      }
+    }
+    stage('Build') {
+      steps {
+        script {
+          props = readJSON(file: "envs.json")
+          slackSend(channel: slackResponse.channelId, message: "Building...", timestamp: slackResponse.ts)
+        }
+        configFileProvider(
+          [configFile(fileId: '996ba840-db18-492e-bb56-55119c2224f1', variable: 'MAVEN_SETTINGS')]) {
+          sh "cat $MAVEN_SETTINGS > settings.xml"
+          echo 'Login to ECR'
+          sh 'aws ecr get-login-password --region us-west-1 | docker login --username AWS --password-stdin 159200192518.dkr.ecr.us-west-1.amazonaws.com'
+          echo 'Starting BUILD...'
+          sh "docker build -t $props.ECR_URL:$props.IMAGE_TAG -t $props.ECR_URL:\$(date '+%d%m%y')-$BUILD_NUMBER ."
+          echo 'Pushing container'
+          sh """docker push $props.ECR_URL:$props.IMAGE_TAG
+          docker push $props.ECR_URL:\$(date '+%d%m%y')-$BUILD_NUMBER"""
+        }
+      }
+    }
+
+    stage('Deploy in nexus') {
+     when {
+           branch 'integration/develop'
+         }
+     steps {
+       script {
+         def mvn = tool 'Default Maven';
+         configFileProvider(
+           [configFile(fileId: '996ba840-db18-492e-bb56-55119c2224f1', variable: 'MAVEN_SETTINGS')]) {
+           sh '''cat $MAVEN_SETTINGS > settings.xml
+                 ${mvn}/bin/mvn -s settings.xml -U clean deploy'''
+         }
+       }
+     }
+   }
+
+    stage('Approve') {
+      when {
+        branch 'master'
+      }
+      steps {
+        script {
+          slackSend(color: "#24B0D5", channel: slackResponse.channelId, message: "<$RUN_DISPLAY_URL|Waiting for an approval...>", timestamp: slackResponse.ts)
+        }
+        timeout(time: 60, unit: 'MINUTES') {
+          input(message: 'Should we continue?', ok: 'Yes, we should')
+        }
+      }
+    }
+
+    stage('Deploy') {
+      environment {
+        AWS_REGION = 'us-west-1'
+        PULUMI_CONFIG_PASSPHRASE_FILE = 'passphrase'
+      }
+      steps {
+        git(url: 'https://github.com/aplazo/node.pulumi-infrastructure.git', branch: 'master', credentialsId: 'github')
+        nodejs(nodeJSInstallationName: "node 15.4.0") {
+          withEnv(["PATH+PULUMI=$HOME/.pulumi/bin"]) {
+            sh "cd services/$PROJECT_NAME && npm install && touch passphrase"
+            sh "pulumi login s3://pulumi-apz-infra"
+            sh "pulumi stack select ${PROJECT_NAME}.$environment --cwd services/$PROJECT_NAME/"
+            sh "pulumi up -f -y -c ECR_TAG=\$(date '+%d%m%y')-$BUILD_NUMBER -C services/$PROJECT_NAME/"
+          }
+        }
+      }
+    }
+  }
+  post {
+    always {
+      script {
+        COLOR_MAP = ['SUCCESS': 'good', 'FAILURE': 'danger', 'UNSTABLE': 'danger', 'ABORTED': 'danger']
+        slackSend(channel: slackResponse.channelId, color: COLOR_MAP[currentBuild.currentResult], message: "*${currentBuild.currentResult}:* <$RUN_DISPLAY_URL|Click here> for more info.", timestamp: slackResponse.ts)
+      }
+    }
+  }
+}

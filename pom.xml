@@ -1,0 +1,59 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>mx.aplazo.merchant.app</groupId>
+	<artifactId>merchantApp</artifactId>
+	<version>1.0.0</version>
+	<packaging>pom</packaging>
+	
+	<parent>
+		<groupId>mx.aplazo.architecture</groupId>
+		<artifactId>aplazo-parent</artifactId>
+		<version>2.0.0</version>
+		<relativePath /> <!-- lookup parent from repository -->
+	</parent>
+	
+	<properties>		
+	</properties>
+
+	<name>Microservice MerchantApp</name>
+	<description>Briefly description of Microservice MerchantApp</description>
+
+	<modules>
+		<module>merchantApp-client</module>
+		<module>merchantApp-service</module>
+	</modules>
+	
+	<dependencies>			
+	</dependencies>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>mx.aplazo.merchant.app</groupId>
+				<artifactId>merchantApp-client</artifactId>
+				<version>${project.version}</version>
+			</dependency>			
+		</dependencies>
+	</dependencyManagement>
+	
+	<repositories>
+		<repository>
+			<id>nexus-aplazo</id>
+			<url>https://nexus.aplazo.dev/repository/maven-releases/</url>
+		</repository>
+	</repositories>
+
+	<distributionManagement>
+		<snapshotRepository>
+			<id>nexus-aplazo</id>
+			<url>https://nexus.aplazo.dev/repository/maven-snapshots/</url>
+		</snapshotRepository>
+		<repository>
+			<id>nexus-aplazo</id>
+			<url>https://nexus.aplazo.dev/repository/maven-releases/</url>
+		</repository>
+	</distributionManagement>
+
+</project>
